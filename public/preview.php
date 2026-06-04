@@ -39,6 +39,25 @@ function deny(): never
     exit;
 }
 
+function detected_mime_type(string $path): string
+{
+    if (function_exists('mime_content_type')) {
+        $mime = mime_content_type($path);
+        if (is_string($mime) && $mime !== '') {
+            return $mime;
+        }
+    }
+
+    return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+        'jpg', 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'svg' => 'image/svg+xml',
+        default => 'application/octet-stream',
+    };
+}
+
 $config = load_config();
 if (configured_password_hash($config) !== null && empty($_SESSION['authenticated'])) {
     deny();
@@ -53,7 +72,7 @@ if (!$root || !$path || !is_file($path) || !str_starts_with($path, rtrim($root, 
     deny();
 }
 
-$mime = mime_content_type($path) ?: 'application/octet-stream';
+$mime = detected_mime_type($path);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . filesize($path));
 readfile($path);

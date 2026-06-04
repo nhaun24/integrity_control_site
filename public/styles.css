@@ -222,3 +222,66 @@ figcaption {
         flex-direction: column;
     }
 }
+
+.warning {
+    background: #fff7df;
+    color: #8a5a00;
+}
+
+.photo-preview {
+    background: #f7fbff;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    display: grid;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.85rem;
+}
+
+.photo-preview img {
+    background: #edf2f7;
+    border-radius: 12px;
+    display: block;
+    max-height: 320px;
+    object-fit: contain;
+    width: 100%;
+}
+
+.photo-preview a {
+    color: var(--brand);
+    font-weight: 800;
+}
+
+.photo-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    color: var(--muted);
+    cursor: pointer;
+    display: grid;
+    font: inherit;
+    gap: 0;
+    overflow: hidden;
+    padding: 0;
+    text-align: left;
+}
+
+.photo-card:hover,
+.photo-card.is-selected {
+    background: #fff;
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(22, 77, 122, 0.14);
+}
+
+.photo-card img {
+    aspect-ratio: 4 / 3;
+    background: #edf2f7;
+    display: block;
+    object-fit: cover;
+    width: 100%;
+}
+
+.photo-card span {
+    overflow-wrap: anywhere;
+    padding: 0.55rem;
+}

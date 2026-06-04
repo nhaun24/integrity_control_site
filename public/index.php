@@ -369,6 +369,19 @@ function save_text_items(string $fullPath, string $relative, array $updates): in
 
 function detected_mime_type(string $path): string
 {
+    $extensionMime = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+        'jpg', 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'svg' => 'image/svg+xml',
+        default => null,
+    };
+
+    if ($extensionMime === 'image/svg+xml') {
+        return $extensionMime;
+    }
+
     if (function_exists('mime_content_type')) {
         $mime = mime_content_type($path);
         if (is_string($mime) && $mime !== '') {
@@ -376,14 +389,22 @@ function detected_mime_type(string $path): string
         }
     }
 
-    return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-        'jpg', 'jpeg' => 'image/jpeg',
-        'png' => 'image/png',
-        'gif' => 'image/gif',
-        'webp' => 'image/webp',
-        'svg' => 'image/svg+xml',
-        default => 'application/octet-stream',
-    };
+    return $extensionMime ?? 'application/octet-stream';
+}
+
+function uploaded_file_looks_like_svg(string $tmp): bool
+{
+    $handle = fopen($tmp, 'rb');
+    if ($handle === false) {
+        return false;
+    }
+    $sample = fread($handle, 4096);
+    fclose($handle);
+    if (!is_string($sample) || $sample === '') {
+        return false;
+    }
+
+    return stripos($sample, '<svg') !== false;
 }
 
 function replace_image(array $config, string $relative, array $upload): void
@@ -406,7 +427,11 @@ function replace_image(array $config, string $relative, array $upload): void
         throw new RuntimeException('Unsupported replacement image extension.');
     }
     $mime = detected_mime_type($tmp);
-    if ($ext !== 'svg' && !str_starts_with($mime, 'image/')) {
+    if ($nameExt === 'svg') {
+        if ($mime !== 'image/svg+xml' && !uploaded_file_looks_like_svg($tmp)) {
+            throw new RuntimeException('The replacement file does not look like an SVG image.');
+        }
+    } elseif (!str_starts_with($mime, 'image/')) {
         throw new RuntimeException('The replacement file does not look like an image.');
     }
     backup_file($target, $relative);
@@ -596,7 +621,7 @@ $authenticated = is_authenticated();
                         </select>
                     </label>
                     <label>Replacement file
-                        <input type="file" name="replacement" accept="image/*,.svg" required>
+                        <input type="file" name="replacement" accept="image/*,image/svg+xml,.svg" required>
                     </label>
                     <button type="submit" <?= $imageFiles === [] ? 'disabled' : '' ?>>Replace selected photo</button>
                 </form>

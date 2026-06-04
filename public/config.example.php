@@ -11,7 +11,7 @@ return [
     'page_extensions' => ['html', 'htm'],
 
     // File extensions treated as replaceable site photos/images.
-    'image_extensions' => ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+    'image_extensions' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'],
 
     // Safety limit for uploaded replacement photos.
     'max_upload_bytes' => 10 * 1024 * 1024,

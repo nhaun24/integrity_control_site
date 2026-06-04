@@ -41,6 +41,19 @@ function deny(): never
 
 function detected_mime_type(string $path): string
 {
+    $extensionMime = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+        'jpg', 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'svg' => 'image/svg+xml',
+        default => null,
+    };
+
+    if ($extensionMime === 'image/svg+xml') {
+        return $extensionMime;
+    }
+
     if (function_exists('mime_content_type')) {
         $mime = mime_content_type($path);
         if (is_string($mime) && $mime !== '') {
@@ -48,14 +61,7 @@ function detected_mime_type(string $path): string
         }
     }
 
-    return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-        'jpg', 'jpeg' => 'image/jpeg',
-        'png' => 'image/png',
-        'gif' => 'image/gif',
-        'webp' => 'image/webp',
-        'svg' => 'image/svg+xml',
-        default => 'application/octet-stream',
-    };
+    return $extensionMime ?? 'application/octet-stream';
 }
 
 $config = load_config();

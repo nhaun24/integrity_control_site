@@ -18,6 +18,11 @@ A small PHP control panel for the Integrity website. It is designed to run on th
 - `public/styles.css` — dashboard styling.
 - `public/config.example.php` — defaults and deployment settings.
 
+## Server requirements
+
+- PHP 8.0 or newer.
+- PHP DOM/XML (`php-xml` on Debian/Ubuntu or `php-dom`/`php-xml` on many other distributions) is recommended for the full DOM-based text editor. If it is missing, the control panel automatically uses its built-in limited editor for simple HTML text.
+
 ## Apache setup
 
 Point an Apache virtual host or protected location at this repository's `public/` directory. Example:

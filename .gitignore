@@ -1,0 +1,5 @@
+/var/data/*.json
+/var/backups/*
+!/var/backups/.gitkeep
+
+/public/config.php

@@ -132,8 +132,17 @@ function backup_file(string $fullPath, string $relative): string
     return $backup;
 }
 
+function dom_extension_available(): bool
+{
+    return class_exists('DOMDocument') && class_exists('DOMXPath');
+}
+
 function dom_for_file(string $fullPath): DOMDocument
 {
+    if (!dom_extension_available()) {
+        throw new RuntimeException('PHP DOM/XML extension is not installed. Using the built-in HTML fallback editor instead.');
+    }
+
     $content = (string)file_get_contents($fullPath);
     $dom = new DOMDocument('1.0', 'UTF-8');
     libxml_use_internal_errors(true);
@@ -193,8 +202,68 @@ function element_by_key(DOMDocument $dom, string $key): ?DOMElement
     return $current instanceof DOMElement ? $current : null;
 }
 
+function protected_html_ranges(string $content): array
+{
+    preg_match_all('/<(script|style|noscript|svg)\b[^>]*>.*?<\/\1>/is', $content, $matches, PREG_OFFSET_CAPTURE);
+    $ranges = [];
+    foreach ($matches[0] as $match) {
+        $ranges[] = [$match[1], $match[1] + strlen($match[0])];
+    }
+    return $ranges;
+}
+
+function offset_in_ranges(int $offset, array $ranges): bool
+{
+    foreach ($ranges as [$start, $end]) {
+        if ($offset >= $start && $offset < $end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function fallback_text_matches(string $content): array
+{
+    $tags = 'h[1-6]|p|a|button|span|li|figcaption|small|strong|em|label|option|title';
+    $pattern = '/<(' . $tags . ')\b([^>]*)>([^<>]+)<\/\1>/iu';
+    preg_match_all($pattern, $content, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER);
+    $protectedRanges = protected_html_ranges($content);
+    $items = [];
+    $index = 0;
+
+    foreach ($matches as $match) {
+        $offset = $match[0][1];
+        if (offset_in_ranges($offset, $protectedRanges)) {
+            continue;
+        }
+
+        $rawText = $match[3][0];
+        $text = trim(preg_replace('/\s+/', ' ', html_entity_decode($rawText, ENT_QUOTES | ENT_HTML5, 'UTF-8')) ?? '');
+        if ($text === '') {
+            continue;
+        }
+
+        $items[] = [
+            'key' => 'fallback:' . $index,
+            'tag' => strtolower($match[1][0]),
+            'text' => $text,
+            'full' => $match[0][0],
+            'offset' => $offset,
+            'text_offset' => $match[3][1],
+            'text_length' => strlen($rawText),
+        ];
+        $index++;
+    }
+
+    return $items;
+}
+
 function editable_text_items(string $fullPath): array
 {
+    if (!dom_extension_available()) {
+        return fallback_text_matches((string)file_get_contents($fullPath));
+    }
+
     $dom = dom_for_file($fullPath);
     $xpath = new DOMXPath($dom);
     $query = '//*[not(self::script) and not(self::style) and not(self::noscript) and not(self::svg)]';
@@ -226,8 +295,50 @@ function editable_text_items(string $fullPath): array
     return $items;
 }
 
+function save_text_items_with_fallback(string $fullPath, string $relative, array $updates): int
+{
+    $content = (string)file_get_contents($fullPath);
+    $items = fallback_text_matches($content);
+    $replacements = [];
+    $changed = 0;
+
+    foreach ($items as $item) {
+        $key = $item['key'];
+        if (!isset($updates[$key]) || !is_string($updates[$key])) {
+            continue;
+        }
+
+        $newValue = trim($updates[$key]);
+        if ($item['text'] === $newValue) {
+            continue;
+        }
+
+        $replacements[] = [
+            'offset' => $item['text_offset'],
+            'length' => $item['text_length'],
+            'value' => htmlspecialchars($newValue, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+        ];
+        $changed++;
+    }
+
+    if ($changed > 0) {
+        backup_file($fullPath, $relative);
+        usort($replacements, static fn(array $a, array $b): int => $b['offset'] <=> $a['offset']);
+        foreach ($replacements as $replacement) {
+            $content = substr_replace($content, $replacement['value'], $replacement['offset'], $replacement['length']);
+        }
+        file_put_contents($fullPath, $content, LOCK_EX);
+    }
+
+    return $changed;
+}
+
 function save_text_items(string $fullPath, string $relative, array $updates): int
 {
+    if (!dom_extension_available()) {
+        return save_text_items_with_fallback($fullPath, $relative, $updates);
+    }
+
     $dom = dom_for_file($fullPath);
     $changed = 0;
     foreach ($updates as $key => $value) {
@@ -256,6 +367,25 @@ function save_text_items(string $fullPath, string $relative, array $updates): in
     return $changed;
 }
 
+function detected_mime_type(string $path): string
+{
+    if (function_exists('mime_content_type')) {
+        $mime = mime_content_type($path);
+        if (is_string($mime) && $mime !== '') {
+            return $mime;
+        }
+    }
+
+    return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+        'jpg', 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'svg' => 'image/svg+xml',
+        default => 'application/octet-stream',
+    };
+}
+
 function replace_image(array $config, string $relative, array $upload): void
 {
     $target = resolve_target_file($config, $relative);
@@ -275,7 +405,7 @@ function replace_image(array $config, string $relative, array $upload): void
     if (!in_array($nameExt, $allowedExt, true)) {
         throw new RuntimeException('Unsupported replacement image extension.');
     }
-    $mime = mime_content_type($tmp) ?: '';
+    $mime = detected_mime_type($tmp);
     if ($ext !== 'svg' && !str_starts_with($mime, 'image/')) {
         throw new RuntimeException('The replacement file does not look like an image.');
     }
@@ -291,7 +421,7 @@ ensure_private_dirs();
 $action = $_POST['action'] ?? $_GET['action'] ?? 'dashboard';
 
 try {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         if ($action === 'setup') {
             require_csrf();
             $password = (string)($_POST['password'] ?? '');
@@ -404,6 +534,9 @@ $authenticated = is_authenticated();
             <article class="card">
                 <h2>Edit text descriptions</h2>
                 <p>Select a page, edit headings, descriptions, buttons, or short text blocks, then save. The original file is backed up first.</p>
+                <?php if (!dom_extension_available()): ?>
+                    <div class="notice warning">PHP DOM/XML is not installed, so this panel is using a built-in fallback editor for simple HTML text.</div>
+                <?php endif; ?>
                 <form method="get" class="inline-form">
                     <label>Page
                         <select name="page" onchange="this.form.submit()">
@@ -443,11 +576,20 @@ $authenticated = is_authenticated();
             <article class="card">
                 <h2>Change photos</h2>
                 <p>Replace an existing site image with a new upload while keeping the same filename, so current page references keep working.</p>
+                <?php $selectedImage = $imageFiles[0] ?? ''; ?>
+                <?php if ($imageFiles === []): ?>
+                    <p class="muted">No supported image files were found in the configured site folder.</p>
+                <?php else: ?>
+                    <div class="photo-preview">
+                        <img id="selected-photo-preview" src="preview.php?file=<?= rawurlencode($selectedImage) ?>" alt="Selected existing photo preview">
+                        <a id="selected-photo-link" href="preview.php?file=<?= rawurlencode($selectedImage) ?>" target="_blank" rel="noopener">Open selected photo full size</a>
+                    </div>
+                <?php endif; ?>
                 <form method="post" enctype="multipart/form-data" class="stack">
                     <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
                     <input type="hidden" name="action" value="replace_image">
                     <label>Current photo
-                        <select name="image" required>
+                        <select name="image" required id="image-select">
                             <?php foreach ($imageFiles as $image): ?>
                                 <option value="<?= e($image) ?>"><?= e($image) ?></option>
                             <?php endforeach; ?>
@@ -456,19 +598,55 @@ $authenticated = is_authenticated();
                     <label>Replacement file
                         <input type="file" name="replacement" accept="image/*,.svg" required>
                     </label>
-                    <button type="submit">Replace selected photo</button>
+                    <button type="submit" <?= $imageFiles === [] ? 'disabled' : '' ?>>Replace selected photo</button>
                 </form>
+                <?php if ($imageFiles !== []): ?>
+                    <p class="muted">Showing <?= count($imageFiles) ?> existing photo(s). Click a thumbnail to select it for replacement.</p>
+                <?php endif; ?>
                 <div class="gallery">
-                    <?php foreach (array_slice($imageFiles, 0, 24) as $image): ?>
-                        <figure>
-                            <img src="preview.php?file=<?= rawurlencode($image) ?>" alt="">
-                            <figcaption><?= e($image) ?></figcaption>
-                        </figure>
+                    <?php foreach ($imageFiles as $image): ?>
+                        <button class="photo-card" type="button" data-image="<?= e($image) ?>">
+                            <img src="preview.php?file=<?= rawurlencode($image) ?>" alt="Preview of <?= e($image) ?>" loading="lazy">
+                            <span><?= e($image) ?></span>
+                        </button>
                     <?php endforeach; ?>
                 </div>
             </article>
         </section>
     <?php endif; ?>
 </main>
+<script>
+const imageSelect = document.getElementById('image-select');
+const selectedPhotoPreview = document.getElementById('selected-photo-preview');
+const selectedPhotoLink = document.getElementById('selected-photo-link');
+const photoCards = document.querySelectorAll('.photo-card');
+
+function previewUrl(file) {
+    return 'preview.php?file=' + encodeURIComponent(file);
+}
+
+function selectImage(file) {
+    if (imageSelect) {
+        imageSelect.value = file;
+    }
+    if (selectedPhotoPreview && selectedPhotoLink) {
+        const url = previewUrl(file);
+        selectedPhotoPreview.src = url;
+        selectedPhotoLink.href = url;
+    }
+    photoCards.forEach((card) => {
+        card.classList.toggle('is-selected', card.dataset.image === file);
+    });
+}
+
+if (imageSelect) {
+    imageSelect.addEventListener('change', () => selectImage(imageSelect.value));
+    selectImage(imageSelect.value);
+}
+
+photoCards.forEach((card) => {
+    card.addEventListener('click', () => selectImage(card.dataset.image));
+});
+</script>
 </body>
 </html>

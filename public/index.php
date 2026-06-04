@@ -560,7 +560,7 @@ $authenticated = is_authenticated();
                 <h2>Edit text descriptions</h2>
                 <p>Select a page, edit headings, descriptions, buttons, or short text blocks, then save. The original file is backed up first.</p>
                 <?php if (!dom_extension_available()): ?>
-                    <div class="notice warning">PHP DOM/XML is not installed, so this panel is using a built-in fallback editor for simple HTML text.</div>
+                    <div class="notice info">Limited text editor mode is active. Simple HTML text can still be edited here; install the PHP DOM/XML extension on the server to enable full DOM-based editing.</div>
                 <?php endif; ?>
                 <form method="get" class="inline-form">
                     <label>Page

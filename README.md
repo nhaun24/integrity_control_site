@@ -7,7 +7,7 @@ A small PHP control panel for the Integrity website. It is designed to run on th
 - Creates a password-protected control panel on first launch.
 - Scans the main site for editable page files (`.html`, `.htm` by default).
 - Lets an authenticated admin update simple text blocks such as headings, paragraphs, buttons, and short descriptions.
-- Scans the main site for photos/images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp` by default).
+- Scans the main site for photos/images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.svg` by default).
 - Replaces an existing photo while keeping the same filename so the live site keeps pointing at it.
 - Creates a backup in `var/backups/` before every text save or image replacement.
 

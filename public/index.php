@@ -222,38 +222,123 @@ function offset_in_ranges(int $offset, array $ranges): bool
     return false;
 }
 
+function normalized_editable_text(string $rawText): string
+{
+    return trim(preg_replace('/\s+/', ' ', html_entity_decode($rawText, ENT_QUOTES | ENT_HTML5, 'UTF-8')) ?? '');
+}
+
+function add_fallback_text_item(
+    array &$items,
+    int &$index,
+    string $tag,
+    string $rawText,
+    int $matchOffset,
+    int $textOffset,
+    ?string $context = null
+): void {
+    $text = normalized_editable_text($rawText);
+    if ($text === '') {
+        return;
+    }
+
+    preg_match('/^\s*/u', $rawText, $leadingWhitespace);
+    preg_match('/\s*$/u', $rawText, $trailingWhitespace);
+
+    $item = [
+        'key' => 'fallback:' . $index,
+        'tag' => strtolower($tag),
+        'text' => $text,
+        'offset' => $matchOffset,
+        'text_offset' => $textOffset,
+        'text_length' => strlen($rawText),
+        'prefix' => $leadingWhitespace[0] ?? '',
+        'suffix' => $trailingWhitespace[0] ?? '',
+    ];
+
+    if ($context !== null && $context !== '') {
+        $item['context'] = $context;
+    }
+
+    $items[] = $item;
+    $index++;
+}
+
 function fallback_text_matches(string $content): array
 {
     $tags = 'h[1-6]|p|a|button|span|li|figcaption|small|strong|em|label|option|title';
-    $pattern = '/<(' . $tags . ')\b([^>]*)>([^<>]+)<\/\1>/iu';
-    preg_match_all($pattern, $content, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER);
     $protectedRanges = protected_html_ranges($content);
     $items = [];
     $index = 0;
 
-    foreach ($matches as $match) {
+    $simplePattern = '/<(' . $tags . ')\b([^>]*)>([^<>]+)<\/\1>/iu';
+    preg_match_all($simplePattern, $content, $simpleMatches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER);
+    foreach ($simpleMatches as $match) {
         $offset = $match[0][1];
         if (offset_in_ranges($offset, $protectedRanges)) {
             continue;
         }
 
-        $rawText = $match[3][0];
-        $text = trim(preg_replace('/\s+/', ' ', html_entity_decode($rawText, ENT_QUOTES | ENT_HTML5, 'UTF-8')) ?? '');
-        if ($text === '') {
+        add_fallback_text_item($items, $index, $match[1][0], $match[3][0], $offset, $match[3][1]);
+    }
+
+    $mixedPattern = '/<(p|li|figcaption|small|label)\b([^>]*)>(.*?)<\/\1>/isu';
+    preg_match_all($mixedPattern, $content, $mixedMatches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER);
+    foreach ($mixedMatches as $match) {
+        $offset = $match[0][1];
+        if (offset_in_ranges($offset, $protectedRanges)) {
             continue;
         }
 
-        $items[] = [
-            'key' => 'fallback:' . $index,
-            'tag' => strtolower($match[1][0]),
-            'text' => $text,
-            'full' => $match[0][0],
-            'offset' => $offset,
-            'text_offset' => $match[3][1],
-            'text_length' => strlen($rawText),
-        ];
-        $index++;
+        $innerHtml = $match[3][0];
+        if (!str_contains($innerHtml, '<')) {
+            continue;
+        }
+
+        $context = null;
+        if (preg_match('/<strong\b[^>]*>([^<>]+)<\/strong>/iu', $innerHtml, $labelMatch)) {
+            $context = normalized_editable_text($labelMatch[1]);
+        }
+
+        $inlineDepth = 0;
+        preg_match_all('/<[^>]+>|[^<]+/u', $innerHtml, $tokens, PREG_OFFSET_CAPTURE);
+        foreach ($tokens[0] as $token) {
+            $rawToken = $token[0];
+            if ($rawToken === '') {
+                continue;
+            }
+
+            if (str_starts_with($rawToken, '<')) {
+                if (preg_match('/^<\s*\//', $rawToken)) {
+                    $inlineDepth = max(0, $inlineDepth - 1);
+                } elseif (
+                    !preg_match('/\/\s*>$/', $rawToken)
+                    && !preg_match('/^<\s*(br|hr|img|input|meta|link)\b/i', $rawToken)
+                ) {
+                    $inlineDepth++;
+                }
+                continue;
+            }
+
+            if ($inlineDepth > 0) {
+                continue;
+            }
+
+            add_fallback_text_item(
+                $items,
+                $index,
+                $match[1][0],
+                $rawToken,
+                $offset,
+                $match[3][1] + $token[1],
+                $context
+            );
+        }
     }
+
+    usort(
+        $items,
+        static fn(array $a, array $b): int => ($a['text_offset'] <=> $b['text_offset']) ?: ($a['offset'] <=> $b['offset'])
+    );
 
     return $items;
 }
@@ -316,7 +401,9 @@ function save_text_items_with_fallback(string $fullPath, string $relative, array
         $replacements[] = [
             'offset' => $item['text_offset'],
             'length' => $item['text_length'],
-            'value' => htmlspecialchars($newValue, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+            'value' => ($item['prefix'] ?? '')
+                . htmlspecialchars($newValue, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . ($item['suffix'] ?? ''),
         ];
         $changed++;
     }
@@ -590,7 +677,9 @@ $authenticated = is_authenticated();
                         <?php endif; ?>
                         <?php foreach ($items as $item): ?>
                             <label>
-                                <span class="label-title">&lt;<?= e($item['tag']) ?>&gt;</span>
+                                <span class="label-title">
+                                    &lt;<?= e($item['tag']) ?>&gt;<?= isset($item['context']) ? ' ' . e($item['context']) : '' ?>
+                                </span>
                                 <textarea name="text[<?= e($item['key']) ?>]" rows="3"><?= e($item['text']) ?></textarea>
                             </label>
                         <?php endforeach; ?>
